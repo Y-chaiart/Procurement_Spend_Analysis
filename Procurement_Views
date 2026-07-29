@@ -1,0 +1,528 @@
+-- purchases + purchase_prices --
+CREATE VIEW vw_ProcurementBase AS
+SELECT
+    p.InventoryId,p.Brand,
+    p.Description,p.Size,p.PONumber,
+    p.PODate,p.ReceivingDate,p.Quantity,
+    p.PurchasePrice,p.Dollars,
+    p.VendorNumber,p.VendorName,
+    pp.Price AS ListPrice,
+    pp.Volume
+FROM purchases p
+LEFT JOIN purchase_prices pp
+ON p.Brand = pp.Brand;
+
+-- Total_Procurement_Spend --
+SELECT 
+CONCAT(ROUND(SUM(Dollars) / 1000000.0, 2), ' M') AS Total_Spend
+FROM vw_ProcurementBase;
+
+-- Spend by Vendor --
+SELECT
+    VendorNumber,
+    VendorName,
+    SUM(Dollars) AS Total_Spend,
+    COUNT(*) AS Purchase_Count
+FROM vw_ProcurementBase
+GROUP BY VendorNumber, VendorName
+ORDER BY Total_Spend DESC;
+
+-- Spend by Brand --
+SELECT
+    Brand,
+    Description,
+    SUM(Dollars) AS Total_Spend,
+    SUM(Quantity) AS Total_Quantity
+FROM vw_ProcurementBase
+GROUP BY Brand, Description
+ORDER BY Total_Spend DESC;
+
+-- Monthly Spend Trend -- 
+SELECT
+    YEAR(PODate) AS Purchase_Year,
+    MONTH(PODate) AS Purchase_Month,
+    SUM(Dollars) AS Total_Spend
+FROM vw_ProcurementBase
+GROUP BY
+    YEAR(PODate),MONTH(PODate)
+ORDER BY
+    Purchase_Year,Purchase_Month;
+
+-- Total PO Count & Average PO Value --
+SELECT
+    COUNT(DISTINCT PONumber) AS Total_POs,
+    ROUND(SUM(Dollars) / COUNT(DISTINCT PONumber),2) AS Avg_POValue
+FROM vw_ProcurementBase;
+
+-- Average Unit Cost by Brand --
+SELECT
+    Brand,Description,
+    AVG(PurchasePrice) AS AvgUnitCost
+FROM vw_ProcurementBase
+GROUP BY Brand, Description
+ORDER BY AvgUnitCost DESC;
+
+-- Price Variance --
+SELECT
+    Brand,Description,
+    PurchasePrice,ListPrice,
+    PurchasePrice - ListPrice  Price_Variance,
+    ROUND((ListPrice - PurchasePrice) / NULLIF(ListPrice, 0) * 100, 2) Price_Variance_Pct
+FROM vw_ProcurementBase;
+
+-- Vendor Concentration / Pareto (80-20) --
+SELECT
+    VendorNumber,
+    VendorName,
+    SUM(Dollars) AS VendorSpend,
+    ROUND(SUM(Dollars) * 100.0 / SUM(SUM(Dollars)) OVER (), 2) AS SpendPercent,
+    ROUND(SUM(SUM(Dollars)) OVER (ORDER BY SUM(Dollars) DESC) * 100.0 
+        / SUM(SUM(Dollars)) OVER (), 2) AS CumulativePercent
+FROM vw_ProcurementBase
+GROUP BY VendorNumber, VendorName
+ORDER BY VendorSpend DESC;
+
+-- Bulk Purchase Efficiency --
+SELECT
+    CASE
+        WHEN Quantity <= 10 THEN '1-10'
+        WHEN Quantity <= 50 THEN '11-50'
+        WHEN Quantity <= 100 THEN '51-100'
+        ELSE '100+'
+    END AS QuantityBand,
+    AVG(PurchasePrice) AS AvgUnitCost,
+    COUNT(*) AS OrderCount
+FROM vw_ProcurementBase
+GROUP BY
+    CASE
+        WHEN Quantity <= 10 THEN '1-10'
+        WHEN Quantity <= 50 THEN '11-50'
+        WHEN Quantity <= 100 THEN '51-100'
+        ELSE '100+'
+    END
+ORDER BY MIN(Quantity);
+
+
+-- Lead Time Analysis -- 
+-- How long does it take to receive goods after placing a Purchase Order? --
+SELECT
+    VendorNumber,
+    VendorName,
+    AVG(DATEDIFF(DAY, PODate, ReceivingDate)) AS AvgLeadTimeDays
+FROM vw_ProcurementBase
+WHERE PODate IS NOT NULL
+  AND ReceivingDate IS NOT NULL
+GROUP BY
+    VendorNumber,
+    VendorName
+ORDER BY AvgLeadTimeDays DESC;
+
+
+-- Invoice vs Purchase Amount (PO-level) --
+-- Are vendors invoicing the same total as the purchase order? --
+SELECT
+    vi.PONumber,
+    vi.VendorNumber,
+    vi.VendorName,
+    SUM(pb.Dollars) AS TotalPurchaseAmount,
+    MAX(vi.Dollars) AS InvoiceAmount,
+    (MAX(vi.Dollars) - SUM(pb.Dollars)) AS Discrepancy
+FROM vw_ProcurementBase pb
+JOIN vendor_invoice vi
+    ON pb.VendorNumber = vi.VendorNumber
+    AND pb.PONumber = vi.PONumber
+GROUP BY vi.PONumber, vi.VendorNumber, vi.VendorName
+HAVING MAX(vi.Dollars) <> SUM(pb.Dollars)
+ORDER BY ABS(MAX(vi.Dollars) - SUM(pb.Dollars)) DESC;
+
+
+-- Duplicate Invoice Check --
+SELECT
+    VendorNumber,VendorName,
+    PONumber,Dollars,
+    COUNT(*) AS OccurrenceCount
+FROM vendor_invoice
+GROUP BY VendorNumber, VendorName, PONumber, Dollars
+HAVING COUNT(*) > 1;
+
+
+-- Purchase-to-Pay Cycle --
+SELECT
+    VendorNumber,VendorName,
+    AVG(DATEDIFF(DAY, InvoiceDate, PayDate)) AS AvgPaymentDays
+FROM vendor_invoice
+GROUP BY
+    VendorNumber,VendorName
+ORDER BY AvgPaymentDays DESC;
+
+
+-- Maverick Spend --
+-- Flags brands purchased from multiple vendors at different unit prices --
+SELECT
+    Brand,
+    Description,
+    COUNT(DISTINCT VendorNumber) AS VendorCount,
+    MIN(PurchasePrice) AS MinPrice,
+    MAX(PurchasePrice) AS MaxPrice,
+    (MAX(PurchasePrice) - MIN(PurchasePrice)) AS PriceSpread
+FROM vw_ProcurementBase
+GROUP BY Brand, Description
+HAVING COUNT(DISTINCT VendorNumber) > 1
+   AND MAX(PurchasePrice) <> MIN(PurchasePrice)
+ORDER BY PriceSpread DESC;
+
+
+-- Lead Time Distribution --
+-- Buckets purchases by delivery speed to show reliability, not just average --
+SELECT
+    CASE
+        WHEN DATEDIFF(DAY, PODate, ReceivingDate) <= 3 THEN '0-3 days'
+        WHEN DATEDIFF(DAY, PODate, ReceivingDate) <= 7 THEN '4-7 days'
+        WHEN DATEDIFF(DAY, PODate, ReceivingDate) <= 14 THEN '8-14 days'
+        ELSE '15+ days'
+    END AS LeadTimeBucket,
+    COUNT(*) AS OrderCount,
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS PercentOfOrders
+FROM vw_ProcurementBase
+WHERE ReceivingDate IS NOT NULL
+GROUP BY
+    CASE
+        WHEN DATEDIFF(DAY, PODate, ReceivingDate) <= 3 THEN '0-3 days'
+        WHEN DATEDIFF(DAY, PODate, ReceivingDate) <= 7 THEN '4-7 days'
+        WHEN DATEDIFF(DAY, PODate, ReceivingDate) <= 14 THEN '8-14 days'
+        ELSE '15+ days'
+    END
+ORDER BY MIN(DATEDIFF(DAY, PODate, ReceivingDate));
+--------------------------------------------------------------------------------------------------------------------------
+
+-- vw_ProcurementBase (purchases + purchase_prices) + vendor_invoice --
+
+CREATE OR ALTER VIEW vw_ProcurementFull AS
+SELECT
+    pb.*,
+    vi.InvoiceDate,vi.PayDate,vi.Approval,
+    vi.Quantity AS InvoiceQuantity,
+    vi.Dollars AS InvoiceDollars,
+    vi.Freight
+FROM vw_ProcurementBase pb
+LEFT JOIN vendor_invoice vi
+    ON pb.VendorNumber = vi.VendorNumber
+    AND pb.PONumber = vi.PONumber;
+
+-- Total Invoice Amount --
+SELECT SUM(InvoiceDollars) AS TotalInvoiceAmount
+FROM vw_ProcurementFull;
+
+-- Total Freight Cost --
+SELECT SUM(Freight) AS TotalFreightCost
+FROM vw_ProcurementFull;
+
+-- Vendors with Highest Invoice Amount --
+SELECT
+    VendorNumber,
+    VendorName,
+    SUM(InvoiceDollars) AS Total_InvoiceAmount
+FROM vw_ProcurementFull
+GROUP BY VendorNumber, VendorName
+ORDER BY Total_InvoiceAmount DESC;
+
+-- Freight Cost per Unit --
+SELECT
+    VendorNumber,
+    VendorName,
+    SUM(CAST(Freight AS DECIMAL(18,2))) AS TotalFreight,
+    SUM(CAST(InvoiceQuantity AS BIGINT)) AS TotalQuantity,
+    ROUND(SUM(CAST(Freight AS DECIMAL(18,2))) / NULLIF(SUM(CAST(InvoiceQuantity AS BIGINT)), 0), 2) AS FreightPerUnit
+FROM vw_ProcurementFull
+GROUP BY VendorNumber, VendorName
+ORDER BY FreightPerUnit DESC;
+
+-- Payment Timing (PayDate vs InvoiceDate, days to pay) --
+SELECT
+    VendorNumber,
+    VendorName,
+    AVG(DATEDIFF(DAY, InvoiceDate, PayDate)) AS AvgDaysToPay
+FROM vw_ProcurementFull
+GROUP BY VendorNumber, VendorName
+ORDER BY AvgDaysToPay DESC;
+---------------------------------------------------------------------------------------------------------------------------------------------
+ -- Total Procurement Spend --
+CREATE VIEW vw_TotalProcurementSpend AS
+SELECT
+SUM(Dollars) AS TotalProcurementSpend
+FROM vw_ProcurementBase;
+
+-- Spend by Vendor
+CREATE OR ALTER VIEW vw_SpendByVendor AS
+SELECT
+    VendorNumber,
+    VendorName,
+    SUM(Dollars) AS TotalSpend,
+    COUNT(*) AS PurchaseCount
+FROM vw_ProcurementBase
+GROUP BY
+    VendorNumber,
+    VendorName;
+
+-- Spend by Brand --
+CREATE OR ALTER VIEW vw_SpendByBrand AS 
+SELECT
+    Brand,
+    SUM(Dollars) AS TotalSpend,
+    SUM(Quantity) AS TotalQuantity
+FROM vw_ProcurementBase
+GROUP BY
+    Brand
+
+-- Monthly Procurement Spend --
+CREATE OR ALTER VIEW vw_MonthlySpend AS
+SELECT
+    YEAR(PODate) AS PurchaseYear,
+    MONTH(PODate) AS PurchaseMonth,
+    SUM(Dollars) AS TotalSpend
+FROM vw_ProcurementBase
+GROUP BY
+    YEAR(PODate),
+    MONTH(PODate)
+
+-- POAnalysis --
+CREATE OR ALTER VIEW vw_POAnalysis AS
+SELECT
+    COUNT(DISTINCT PONumber) AS TotalPOs,
+    ROUND(SUM(Dollars) * 1.0 / COUNT(DISTINCT PONumber), 2) AS AveragePOValue
+FROM vw_ProcurementBase;
+
+
+-- Price Variance --
+CREATE OR ALTER VIEW vw_PriceVariance AS
+SELECT
+    Brand,
+    Description,
+    PurchasePrice,
+    ListPrice,
+    (PurchasePrice - ListPrice) AS PriceVariance,
+    ROUND(
+        ((ListPrice - PurchasePrice) / NULLIF(ListPrice, 0)) * 100,
+        2
+    ) AS PriceVariancePct
+FROM vw_ProcurementBase;
+
+-- Vendor Concentration / Pareto (80-20) --
+CREATE OR ALTER VIEW vw_VendorConcentration AS
+SELECT
+    VendorNumber,
+    VendorName,
+    SUM(Dollars) AS VendorSpend
+FROM vw_ProcurementBase
+GROUP BY
+    VendorNumber,
+    VendorName;
+
+-- Bulk Purchase Efficiency --
+CREATE OR ALTER VIEW vw_BulkEfficiency AS
+SELECT
+    CASE
+        WHEN Quantity <= 10 THEN '1-10'
+        WHEN Quantity <= 50 THEN '11-50'
+        WHEN Quantity <= 100 THEN '51-100'
+        ELSE '100+'
+    END AS QuantityBand,
+    AVG(PurchasePrice) AS AvgUnitCost,
+    COUNT(*) AS OrderCount
+FROM vw_ProcurementBase
+GROUP BY
+    CASE
+        WHEN Quantity <= 10 THEN '1-10'
+        WHEN Quantity <= 50 THEN '11-50'
+        WHEN Quantity <= 100 THEN '51-100'
+        ELSE '100+'
+    END;
+
+-- Lead Time Analysis -- 
+CREATE OR ALTER VIEW vw_LeadTime AS
+SELECT
+    VendorNumber,
+    VendorName,
+    AVG(DATEDIFF(DAY, PODate, ReceivingDate)) AS AvgLeadTimeDays
+FROM vw_ProcurementBase
+WHERE
+    PODate IS NOT NULL
+    AND ReceivingDate IS NOT NULL
+GROUP BY
+    VendorNumber,
+    VendorName;
+
+
+-- Lead Time Distribution --
+CREATE OR ALTER VIEW vw_LeadTimeDistribution AS
+SELECT
+    CASE
+        WHEN DATEDIFF(DAY, PODate, ReceivingDate) <= 3 THEN '0-3 Days'
+        WHEN DATEDIFF(DAY, PODate, ReceivingDate) <= 7 THEN '4-7 Days'
+        WHEN DATEDIFF(DAY, PODate, ReceivingDate) <= 14 THEN '8-14 Days'
+        ELSE '15+ Days'
+    END AS LeadTimeBucket,
+    COUNT(*) AS OrderCount,
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) AS PercentageOfOrders
+FROM vw_ProcurementBase
+WHERE
+    PODate IS NOT NULL
+    AND ReceivingDate IS NOT NULL
+GROUP BY
+    CASE
+        WHEN DATEDIFF(DAY, PODate, ReceivingDate) <= 3 THEN '0-3 Days'
+        WHEN DATEDIFF(DAY, PODate, ReceivingDate) <= 7 THEN '4-7 Days'
+        WHEN DATEDIFF(DAY, PODate, ReceivingDate) <= 14 THEN '8-14 Days'
+        ELSE '15+ Days'
+    END;
+
+-- Total Invoice Amount --
+CREATE OR ALTER VIEW vw_TotalInvoiceAmount AS
+SELECT SUM(InvoiceDollars) AS TotalInvoiceAmount
+FROM vw_ProcurementFull;
+
+-- Total Freight Cost --
+CREATE OR ALTER VIEW vw_TotalFreightCost AS
+SELECT SUM(CAST(Freight AS DECIMAL(18,2))) AS TotalFreightCost
+FROM vw_ProcurementFull;
+
+-- Freight Cost per Unit --
+CREATE OR ALTER VIEW vw_FreightPerUnit AS
+SELECT
+    VendorNumber,
+    VendorName,
+    SUM(CAST(Freight AS DECIMAL(18,2))) AS TotalFreight,
+    SUM(CAST(InvoiceQuantity AS BIGINT)) AS TotalQuantity,
+    ROUND(SUM(CAST(Freight AS DECIMAL(18,2))) / NULLIF(SUM(CAST(InvoiceQuantity AS BIGINT)), 0), 2) AS FreightPerUnit
+FROM vw_ProcurementFull
+GROUP BY VendorNumber, VendorName;
+
+
+-- Invoice vs Purchase Amount (PO-level) --
+CREATE OR ALTER VIEW vw_InvoiceVsPurchase AS
+SELECT
+    vi.PONumber,
+    vi.VendorNumber,
+    vi.VendorName,
+    SUM(pb.Dollars) AS TotalPurchaseAmount,
+    MAX(vi.Dollars) AS InvoiceAmount,
+    (MAX(vi.Dollars) - SUM(pb.Dollars)) AS Discrepancy
+FROM vw_ProcurementBase pb
+JOIN vendor_invoice vi
+    ON pb.VendorNumber = vi.VendorNumber
+    AND pb.PONumber = vi.PONumber
+GROUP BY vi.PONumber, vi.VendorNumber, vi.VendorName;
+
+
+-- Payment Timing (PayDate vs InvoiceDate, days to pay) --
+CREATE OR ALTER VIEW vw_PaymentTiming AS
+SELECT
+    VendorNumber,
+    VendorName,
+    AVG(DATEDIFF(DAY, InvoiceDate, PayDate)) AS AvgDaysToPay
+FROM vw_ProcurementFull
+GROUP BY VendorNumber, VendorName;
+
+
+-- Maverick Spend --
+CREATE OR ALTER VIEW vw_MaverickSpend AS
+SELECT
+    Brand,
+    Description,
+    COUNT(DISTINCT VendorNumber) AS VendorCount,
+    MIN(PurchasePrice) AS MinPrice,
+    MAX(PurchasePrice) AS MaxPrice,
+    (MAX(PurchasePrice) - MIN(PurchasePrice)) AS PriceSpread
+FROM vw_ProcurementBase
+GROUP BY Brand, Description
+HAVING COUNT(DISTINCT VendorNumber) > 1
+AND MAX(PurchasePrice) <> MIN(PurchasePrice);
+
+-- BrandLookup --
+CREATE VIEW vw_BrandLookup AS
+SELECT DISTINCT Brand, Description
+FROM purchase_prices;
+
+-------------------------------------------------------------------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
