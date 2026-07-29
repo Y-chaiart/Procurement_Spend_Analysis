@@ -1,0 +1,153 @@
+CREATE TABLE begin_inventory (
+    InventoryId VARCHAR(50),
+    Store INT,
+    City VARCHAR(100),
+    Brand INT,
+    Description VARCHAR(255),
+    Size VARCHAR(50),
+    onHand INT,
+    Price DECIMAL(10,2),
+    startDate DATE
+);
+BULK INSERT dbo.begin_inventory
+FROM 'C:\Inventory_Data\begin_inventory.csv'
+WITH (
+    FIRSTROW = 2,
+    FIELDTERMINATOR = ',',
+    ROWTERMINATOR = '0x0d0a',
+    TABLOCK
+);
+
+CREATE TABLE end_inventory (
+    InventoryId VARCHAR(50),
+    Store INT,
+    City VARCHAR(100),
+    Brand INT,
+    Description VARCHAR(255),
+    Size VARCHAR(50),
+    onHand INT,
+    Price DECIMAL(10,2),
+    endDate DATE
+);
+
+BULK INSERT dbo.end_inventory
+FROM 'C:\Inventory_Data\end_inventory.csv'
+WITH (
+    FIRSTROW = 2,
+    FIELDTERMINATOR = ',',
+    ROWTERMINATOR = '0x0d0a',
+    TABLOCK
+);
+
+CREATE TABLE purchase_prices (
+    Brand INT,
+    Description VARCHAR(255),
+    Price DECIMAL(10,2),
+    Size VARCHAR(50),
+    Volume varchar(20),
+    Classification INT,
+    PurchasePrice DECIMAL(10,2),
+    VendorNumber INT,
+    VendorName VARCHAR(255)
+); 
+
+BULK INSERT dbo.purchase_prices
+FROM 'C:\Inventory_Data\purchase_prices.csv'
+WITH (
+    FIRSTROW = 2,
+    FIELDTERMINATOR = ',',
+    ROWTERMINATOR = '0x0d0a',
+    TABLOCK
+);
+
+CREATE TABLE purchases (
+    InventoryId VARCHAR(50),
+    Store INT,
+    Brand INT,
+    Description VARCHAR(255),
+    Size VARCHAR(50),
+    VendorNumber int,
+    VendorName VARCHAR(255),
+    PONumber varchar(20),
+    PODate varchar(20),
+    ReceivingDate DATE,
+    InvoiceDate DATE,
+    PayDate DATE,
+    PurchasePrice varchar(20),
+    Quantity varchar(20),
+    Dollars decimal(18,2),
+    Classification varchar(20)
+);
+
+BULK INSERT dbo.purchases
+FROM 'C:\Inventory_Data\purchases.csv'
+WITH (
+    FORMAT = 'CSV',
+    FIRSTROW = 2,
+    FIELDQUOTE = '"',
+    FIELDTERMINATOR = ',',
+    ROWTERMINATOR = '0x0a',
+    TABLOCK,
+    CODEPAGE = '65001'   -- add if you hit any encoding/odd character issues
+);
+
+CREATE TABLE dbo.sales (
+    InventoryId VARCHAR(100),
+    Store VARCHAR(50),
+    Brand VARCHAR(50),
+    Description VARCHAR(255),
+    Size VARCHAR(50),
+    SalesQuantity VARCHAR(50),
+    SalesDollars VARCHAR(50),
+    SalesPrice VARCHAR(50),
+    SalesDate VARCHAR(50),
+    Volume VARCHAR(50),
+    Classification VARCHAR(50),
+    ExciseTax VARCHAR(50),
+    VendorNo VARCHAR(50),
+    VendorName VARCHAR(255)
+);
+
+BULK INSERT dbo.sales
+FROM 'C:\Inventory_Data\sales.csv'
+WITH (
+    FIRSTROW = 2,
+    FIELDTERMINATOR = ',',
+    ROWTERMINATOR = '0x0a',
+    TABLOCK
+);
+
+CREATE TABLE dbo.vendor_invoice (
+    VendorNumber INT,
+    VendorName VARCHAR(255),
+    InvoiceDate DATE,
+    PONumber INT,
+    PODate DATE,
+    PayDate DATE,
+    Quantity INT,
+    Dollars DECIMAL(18,2),
+    Freight DECIMAL(18,2),
+    Approval VARCHAR(50)
+);
+
+BULK INSERT dbo.vendor_invoice
+FROM 'C:\Inventory_Data\vendor_invoice.csv'
+WITH (
+    FORMAT = 'CSV',
+    FIRSTROW = 2,
+    FIELDQUOTE = '"',
+    ROWTERMINATOR = '0x0a',
+    TABLOCK
+);
+
+
+
+
+
+
+
+
+
+
+
+
